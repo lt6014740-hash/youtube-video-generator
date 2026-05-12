@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Node
+node_modules/
+video/dist/
+video/build/
+
+# Environment
+.env
+.env.local
+.venv/
+venv/
+
+# Output
+output/
+*.mp4
+*.mp3
+*.wav
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Remotion
+remotion-bundle/
+
+# Misc
+*.log
