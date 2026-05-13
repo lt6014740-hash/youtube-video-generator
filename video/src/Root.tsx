@@ -1,10 +1,11 @@
 import React from "react";
 import { Composition } from "remotion";
+import { HistoricalVideo } from "./HistoricalVideo";
 import { ReactionVideo } from "./ReactionVideo";
 import { ThreadsScrollVideo } from "./ThreadsScrollVideo";
 import { TrueCrimeVideo } from "./TrueCrimeVideo";
 import { YouTubeVideo } from "./YouTubeVideo";
-import type { ReactionProps, ThreadsScrollProps, TrueCrimeProps, VideoProps } from "./types";
+import type { HistoricalProps, ReactionProps, ThreadsScrollProps, TrueCrimeProps, VideoProps } from "./types";
 
 const DEFAULT_PROPS: VideoProps = {
   title: "Welcome to AI Video Generator",
@@ -122,6 +123,37 @@ const REACTION_DEFAULT: ReactionProps = {
   height: 1080,
 };
 
+const HISTORICAL_DEFAULT: HistoricalProps = {
+  title: "Phe \u0110\u1ed3ng Minh \u0111\u00e3 chi\u1ebfn th\u1eafng Ph\u00e1t x\u00edt \u0110\u1ee9c nh\u01b0 th\u1ebf n\u00e0o?",
+  scenes: [
+    {
+      sceneNumber: 1,
+      title: "B\u1ed1i c\u1ea3nh Th\u1ebf chi\u1ebfn II",
+      narration: "N\u0103m 1939, chi\u1ebfn tranh th\u1ebf gi\u1edbi b\u00f9ng n\u1ed5...",
+      durationInSeconds: 8,
+      audioFile: "",
+      year: "1939",
+      icon: "\u2694\ufe0f",
+      bgColor: "#1a3a5c",
+    },
+    {
+      sceneNumber: 2,
+      title: "Tr\u1eadn Normandy",
+      narration: "Ng\u00e0y 6/6/1944, D-Day b\u1eaft \u0111\u1ea7u...",
+      durationInSeconds: 8,
+      audioFile: "",
+      year: "1944",
+      icon: "\ud83c\udfc4",
+      bgColor: "#2d4a3e",
+    },
+  ],
+  totalDurationInSeconds: 16,
+  channelName: "Ki\u1ebfn Th\u1ee9c Hay",
+  fps: 30,
+  width: 720,
+  height: 1280,
+};
+
 const THREADS_SCROLL_DEFAULT: ThreadsScrollProps = {
   posts: [
     {
@@ -184,6 +216,29 @@ export const RemotionRoot: React.FC = () => {
         width={REACTION_DEFAULT.width}
         height={REACTION_DEFAULT.height}
         defaultProps={REACTION_DEFAULT as unknown as Record<string, unknown>}
+      />
+      <Composition
+        id="HistoricalVideo"
+        component={HistoricalVideo as React.FC}
+        durationInFrames={Math.round(
+          HISTORICAL_DEFAULT.totalDurationInSeconds * HISTORICAL_DEFAULT.fps
+        )}
+        fps={HISTORICAL_DEFAULT.fps}
+        width={HISTORICAL_DEFAULT.width}
+        height={HISTORICAL_DEFAULT.height}
+        defaultProps={HISTORICAL_DEFAULT as unknown as Record<string, unknown>}
+        calculateMetadata={async ({ props }) => {
+          const p = props as unknown as HistoricalProps;
+          const totalSeconds =
+            p.totalDurationInSeconds ||
+            p.scenes.reduce((s, sc) => s + sc.durationInSeconds, 0);
+          return {
+            durationInFrames: Math.round(totalSeconds * (p.fps || 30)),
+            fps: p.fps || 30,
+            width: p.width || 720,
+            height: p.height || 1280,
+          };
+        }}
       />
       <Composition
         id="ThreadsScrollVideo"

@@ -111,6 +111,33 @@ export interface ReactionProps {
   height: number;
 }
 
+// --- Historical / Educational types ---
+
+export interface HistoricalSceneData {
+  sceneNumber: number;
+  title: string;
+  narration: string;
+  durationInSeconds: number;
+  audioFile: string;
+  year?: string;
+  icon?: string;
+  bgColor?: string;
+  facts?: string[];
+  imageFile?: string;
+}
+
+export interface HistoricalProps {
+  title: string;
+  scenes: HistoricalSceneData[];
+  totalDurationInSeconds: number;
+  channelName?: string;
+  backgroundMusic?: string;
+  backgroundMusicVolume?: number;
+  fps: number;
+  width: number;
+  height: number;
+}
+
 // --- Threads Scroll types ---
 
 export interface ThreadsPostData {
