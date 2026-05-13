@@ -193,6 +193,16 @@ export const RemotionRoot: React.FC = () => {
         width={THREADS_SCROLL_DEFAULT.width}
         height={THREADS_SCROLL_DEFAULT.height}
         defaultProps={THREADS_SCROLL_DEFAULT as unknown as Record<string, unknown>}
+        calculateMetadata={async ({ props }) => {
+          const p = props as unknown as ThreadsScrollProps;
+          const totalSeconds = p.totalDurationInSeconds || p.posts.reduce((s, post) => s + post.durationInSeconds, 0);
+          return {
+            durationInFrames: Math.round(totalSeconds * (p.fps || 30)),
+            fps: p.fps || 30,
+            width: p.width || 1920,
+            height: p.height || 1080,
+          };
+        }}
       />
     </>
   );
