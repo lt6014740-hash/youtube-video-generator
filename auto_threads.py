@@ -36,6 +36,82 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 # ---------------------------------------------------------------------------
+# GEN Z SLANG DICTIONARY
+# ---------------------------------------------------------------------------
+SLANG_FILE = Path(__file__).parent / "genz_slang.json"
+_slang_dict: dict[str, str] = {}
+
+
+def _load_slang() -> dict[str, str]:
+    """Load Gen Z abbreviation dictionary once."""
+    global _slang_dict
+    if _slang_dict:
+        return _slang_dict
+    if SLANG_FILE.exists():
+        with open(SLANG_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        _slang_dict = data.get("abbreviations", {})
+    return _slang_dict
+
+
+def _expand_slang(text: str) -> str:
+    """Replace Gen Z abbreviations with full words for TTS readability."""
+    slang = _load_slang()
+    if not slang:
+        return text
+    # Sort by length descending so longer matches take priority
+    for abbr in sorted(slang, key=len, reverse=True):
+        full = slang[abbr]
+        # Word-boundary match (case insensitive)
+        pattern = r"(?<!\w)" + re.escape(abbr) + r"(?!\w)"
+        text = re.sub(pattern, full, text, flags=re.IGNORECASE)
+    return text
+
+
+def _humanize_number(text: str) -> str:
+    """Convert number strings like '5K', '3.2K', '1.8M', '554' to Vietnamese speech."""
+    def _num_to_vn(match: re.Match) -> str:
+        raw = match.group(0)
+        suffix = ""
+        num_str = raw
+
+        if raw[-1].upper() in ("K", "M"):
+            suffix = raw[-1].upper()
+            num_str = raw[:-1]
+
+        try:
+            num = float(num_str.replace(",", ""))
+        except ValueError:
+            return raw
+
+        if suffix == "K":
+            num *= 1000
+        elif suffix == "M":
+            num *= 1_000_000
+
+        num = int(num)
+
+        if num >= 1_000_000:
+            m = num / 1_000_000
+            if m == int(m):
+                return f"{int(m)} triệu"
+            return f"{m:.1f} triệu"
+        elif num >= 1000:
+            k = num / 1000
+            remainder = num % 1000
+            if remainder == 0:
+                return f"{int(k)} nghìn"
+            elif remainder % 100 == 0:
+                return f"{int(k)} nghìn {remainder // 100} trăm"
+            else:
+                return f"{int(k)} nghìn {remainder}"
+        return str(num)
+
+    # Match patterns like 5K, 3.2K, 1.8M, 1,234, etc.
+    return re.sub(r"\d[\d,.]*[KMkm]|\d[\d,.]+", _num_to_vn, text)
+
+
+# ---------------------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------------------
 ROOT_DIR = Path(__file__).parent
@@ -766,53 +842,51 @@ def _extract_meme_keyword(content: str) -> str:
 
 
 def _generate_url_intro(original_post: dict) -> str:
-    """Generate intro narration for URL comment video."""
-    username = original_post.get("username", "threads_user")
-    content = original_post.get("content", "")[:80]
+    """Generate intro narration for URL comment video. No username."""
+    content = original_post.get("content", "")[:100]
     likes = original_post.get("likes", 0)
     comments = original_post.get("comments", 0)
 
+    content = _expand_slang(content)
+    content = _humanize_number(content)
+    likes_text = _humanize_number(str(likes))
+    comments_text = _humanize_number(str(comments))
+
     intros = [
-        f"Nóng nè! Bài viết của @{username}: \"{content}\". "
-        f"{likes:,} likes và {comments} bình luận, xem mọi người nói gì nha!",
-        f"Hot trên Threads! @{username} đăng: \"{content}\". "
-        f"Viral dữ luôn với {likes:,} likes. Cùng đọc bình luận nổi bật!",
-        f"Yo! @{username} đặt câu hỏi: \"{content}\". "
-        f"Cộng đồng Threads bùng nổ với {comments} bình luận. Check ngay!",
+        f"Nóng nè! Bài viết: \"{content}\". "
+        f"{likes_text} likes và {comments_text} bình luận, xem mọi người nói gì nha!",
+        f"Hot trên Threads! \"{content}\". "
+        f"Viral dữ luôn với {likes_text} likes. Cùng đọc bình luận nổi bật!",
+        f"Bài viết đang gây sốt: \"{content}\". "
+        f"Cộng đồng Threads bùng nổ với {comments_text} bình luận. Check ngay!",
     ]
     return random.choice(intros)
 
 
 def _generate_comment_narration(post: dict, index: int, total: int) -> str:
-    """Generate narration for a specific comment in URL mode."""
-    username = post.get("username", "user")
-    content = post.get("content", "")[:150]
+    """Generate narration for a specific comment in URL mode.
+    Rules: no username, humanize numbers, expand slang, read content as-is."""
+    content = post.get("content", "")[:200]
     likes = post.get("likes", 0)
 
-    openers = random.choice(CITY_OPENERS)
-    connector = random.choice(CITY_CONNECTORS)
+    # Expand slang and humanize numbers in content
+    content = _expand_slang(content)
+    content = _humanize_number(content)
 
+    # Humanize like count
     if likes > 500:
-        engagement = f"Comment này {likes} likes, top phản hồi luôn"
+        engagement = f". Bình luận này có {_humanize_number(str(likes))} likes"
     elif likes > 100:
-        engagement = f"{likes} likes, nhiều người đồng tình"
-    elif likes > 0:
-        engagement = f"{likes} likes"
+        engagement = f". {_humanize_number(str(likes))} likes"
     else:
-        engagement = "ý kiến đáng suy ngẫm"
+        engagement = ""
 
-    patterns = [
-        f"{openers} @{username} bình luận: {content}. {engagement}!",
-        f"@{username} phản hồi: {content}. {engagement}, {connector}!",
-        f"Comment từ @{username}: {content}. {engagement}!",
-        f"{openers} @{username} chia sẻ góc nhìn: {content}. {engagement}!",
-    ]
-
-    narration = patterns[index % len(patterns)]
+    # Simple narration: just read the content, minimal filler
+    narration = content + engagement
 
     if index == total - 1:
         closer = random.choice(CITY_CLOSERS)
-        narration += f" {closer}"
+        narration += f". {closer}"
 
     return narration
 
