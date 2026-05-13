@@ -60,6 +60,7 @@ export const YouTubeVideo: React.FC<VideoProps> = ({
             <Scene
               scene={scene}
               sceneIndex={index}
+              totalScenes={scenes.length}
               backgroundColor={backgroundColor}
               accentColor={accentColor}
               fontFamily={fontFamily}
