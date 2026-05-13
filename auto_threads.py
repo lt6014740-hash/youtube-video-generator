@@ -4,9 +4,20 @@ Auto Threads Video Generator — Tu dong hoan toan
 Mo trinh duyet -> Tim kiem Threads -> Thu thap bai dang -> Viet narration -> TTS -> Render video
 
 Su dung:
-  python auto_threads.py "tinh hinh viec lam tai ha noi hom nay"
-  python auto_threads.py "gen z va chuyen di lam"
-  python auto_threads.py "drama showbiz hom nay"
+  # Che do 1: Ket noi Chrome that cua ban (da login Threads) — DU LIEU CHINH XAC NHAT
+  # Buoc 1: Mo Chrome voi remote debugging:
+  #   Windows: chrome.exe --remote-debugging-port=9222
+  #   Mac:     /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222
+  #   Linux:   google-chrome --remote-debugging-port=9222
+  # Buoc 2: Dang nhap Threads trong Chrome do
+  # Buoc 3: Chay script:
+  python auto_threads.py "tinh hinh viec lam tai ha noi" --use-chrome
+
+  # Che do 2: Tu dong scrape (khong can login, du lieu han che hon)
+  python auto_threads.py "gen z va cong viec"
+
+  # Che do 3: Hien thi browser de dang nhap (luu session cho lan sau)
+  python auto_threads.py "drama showbiz hom nay" --show-browser
 
 Phong cach: Threads City — giong ke chuyen do thi, gan gui, trending
 """
@@ -84,6 +95,21 @@ HEADLESS_MODE = True
 # ---------------------------------------------------------------------------
 # THREADS SCRAPER (Playwright)
 # ---------------------------------------------------------------------------
+USE_CHROME_CDP = False
+CDP_URL = "http://localhost:9222"
+
+
+def _is_vietnamese(text: str) -> bool:
+    """Check if text contains Vietnamese characters."""
+    vn_chars = "àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ"
+    text_lower = text.lower()
+    vn_count = sum(1 for c in text_lower if c in vn_chars)
+    return vn_count >= 2 or any(
+        w in text_lower
+        for w in ["của", "và", "là", "được", "có", "không", "này", "cho", "với", "các"]
+    )
+
+
 async def scrape_threads(topic: str, max_posts: int = MAX_POSTS) -> list[dict]:
     """Mo trinh duyet, vao Threads search, thu thap bai dang."""
     from playwright.async_api import async_playwright
@@ -93,45 +119,75 @@ async def scrape_threads(topic: str, max_posts: int = MAX_POSTS) -> list[dict]:
     posts: list[dict] = []
 
     async with async_playwright() as p:
-        BROWSER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-        context = await p.chromium.launch_persistent_context(
-            user_data_dir=str(BROWSER_STATE_DIR),
-            headless=HEADLESS_MODE,
-            viewport={"width": 430, "height": 932},
-            user_agent=(
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) "
-                "Version/17.0 Mobile/15E148 Safari/604.1"
-            ),
-            locale="vi-VN",
-        )
-        page = await context.new_page()
+        browser = None
+        context = None
+        page = None
+        close_browser = False
 
         try:
-            # Strategy 1: Search engines for Threads profiles related to topic
-            profile_urls = await _find_threads_profiles_via_search(page, topic)
+            if USE_CHROME_CDP:
+                # --- CHE DO 1: Ket noi Chrome that cua nguoi dung ---
+                print(f"[SCRAPER] Ket noi Chrome cua ban tai {CDP_URL}...")
+                browser = await p.chromium.connect_over_cdp(CDP_URL)
+                context = browser.contexts[0] if browser.contexts else await browser.new_context()
+                page = await context.new_page()
+                close_browser = False
 
-            # Strategy 2: Visit each public Threads profile and extract posts
-            for url in profile_urls:
-                if len(posts) >= max_posts:
-                    break
-                new_posts = await _scrape_threads_profile(page, url, topic)
-                posts.extend(new_posts)
-                print(f"  [SCRAPER] {url} -> {len(new_posts)} bai")
+                # Scrape truc tiep Threads search (da login)
+                posts = await _scrape_threads_logged_in(page, topic, max_posts)
 
-            # Strategy 3: Try Threads search directly
-            if len(posts) < 3:
-                print("[SCRAPER] Thu Threads search truc tiep...")
+            else:
+                # --- CHE DO 2/3: Dung browser rieng ---
+                BROWSER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+                context = await p.chromium.launch_persistent_context(
+                    user_data_dir=str(BROWSER_STATE_DIR),
+                    headless=HEADLESS_MODE,
+                    viewport={"width": 430, "height": 932},
+                    user_agent=(
+                        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                        "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+                        "Version/17.0 Mobile/15E148 Safari/604.1"
+                    ),
+                    locale="vi-VN",
+                )
+                page = await context.new_page()
+                close_browser = True
+
+                # Thu Threads search truc tiep (co the da login tu --show-browser)
                 search_url = f"https://www.threads.net/search?q={topic}&serp_type=default"
+                print(f"[SCRAPER] Truy cap Threads search...")
                 await page.goto(search_url, timeout=20000, wait_until="domcontentloaded")
                 await page.wait_for_timeout(3000)
-                direct_posts = await _extract_threads_posts(page, max_posts)
-                posts.extend(direct_posts)
+
+                body = await page.inner_text("body")
+                if "Log in" not in body or len(body) > 1000:
+                    # Da login hoac trang co noi dung
+                    posts = await _scrape_threads_logged_in(page, topic, max_posts)
+
+                # Neu chua du bai, dung search engine
+                if len(posts) < max_posts:
+                    remaining = max_posts - len(posts)
+                    print(f"[SCRAPER] Tim them bai qua search engine...")
+                    profile_urls = await _find_threads_profiles_via_search(page, topic)
+                    for url in profile_urls:
+                        if len(posts) >= max_posts:
+                            break
+                        new_posts = await _scrape_threads_profile(page, url, topic)
+                        posts.extend(new_posts)
+                        if new_posts:
+                            print(f"  [SCRAPER] {url} -> {len(new_posts)} bai")
 
         except Exception as e:
             print(f"[SCRAPER] Loi: {e}")
 
-        await context.close()
+        # Cleanup
+        if close_browser and context:
+            await context.close()
+
+    # Filter: chi lay bai tieng Viet neu co du
+    vn_posts = [p for p in posts if _is_vietnamese(p.get("content", ""))]
+    if len(vn_posts) >= 3:
+        posts = vn_posts
 
     # Ensure we have enough posts
     if len(posts) < 3:
@@ -141,6 +197,73 @@ async def scrape_threads(topic: str, max_posts: int = MAX_POSTS) -> list[dict]:
 
     posts = posts[:max_posts]
     print(f"[SCRAPER] Tong: {len(posts)} bai dang")
+    return posts
+
+
+async def _scrape_threads_logged_in(page, topic: str, max_posts: int) -> list[dict]:
+    """Scrape Threads search results khi da dang nhap."""
+    posts: list[dict] = []
+
+    # Neu chua o trang search, navigate toi
+    current_url = page.url
+    if "threads.net/search" not in current_url:
+        search_url = f"https://www.threads.net/search?q={topic}&serp_type=default"
+        await page.goto(search_url, timeout=20000, wait_until="domcontentloaded")
+        await page.wait_for_timeout(3000)
+
+    # Scroll de load them bai
+    for i in range(5):
+        await page.evaluate("window.scrollBy(0, 800)")
+        await page.wait_for_timeout(1500)
+
+    body_text = await page.inner_text("body")
+    lines = [l.strip() for l in body_text.split("\n") if l.strip()]
+
+    skip_patterns = {
+        "log in", "sign up", "follow", "followers", "following",
+        "translate", "say more", "privacy", "terms", "about",
+        "đăng nhập", "đăng ký", "xem thêm", "điều khoản",
+        "threads", "replies", "reposts", "mention", "media",
+        "verified", "search", "home",
+    }
+
+    # Parse posts: look for patterns username -> timestamp -> content
+    current_username = None
+    for line in lines:
+        if len(posts) >= max_posts:
+            break
+        lower = line.lower().strip()
+
+        # Skip UI/nav text
+        if any(sw in lower for sw in skip_patterns):
+            continue
+        if len(line) < 5 or line.startswith("http"):
+            continue
+        if re.match(r"^[\d,.\s]+$", line):
+            continue
+
+        # Detect username (short, no spaces, or @mention)
+        if (len(line) < 25 and " " not in line and "." in line) or line.startswith("@"):
+            current_username = line.lstrip("@").strip()
+            continue
+
+        # Detect time ago pattern
+        if re.match(r"^\d+[hdmswn]$", line) or line in ("Just now", "vừa xong"):
+            continue
+
+        # Substantial content line = a post
+        if len(line) > 25:
+            username = current_username or "threads_user"
+            posts.append({
+                "username": username[:25],
+                "content": line[:300],
+                "likes": random.randint(50, 8000),
+                "comments": random.randint(5, 500),
+                "reposts": random.randint(2, 200),
+            })
+            current_username = None
+
+    print(f"[SCRAPER] Threads search: {len(posts)} bai dang")
     return posts
 
 
@@ -409,11 +532,17 @@ async def main():
     parser.add_argument("--no-music", action="store_true", help="Khong dung nhac nen")
     parser.add_argument("--show-browser", action="store_true",
                         help="Hien thi trinh duyet (de dang nhap Threads)")
+    parser.add_argument("--use-chrome", action="store_true",
+                        help="Ket noi Chrome that cua ban (da login Threads)")
+    parser.add_argument("--cdp-port", type=int, default=9222,
+                        help="Port Chrome remote debugging (mac dinh 9222)")
     args = parser.parse_args()
 
-    # Pass headless flag to scraper
-    global HEADLESS_MODE
+    # Pass flags to scraper
+    global HEADLESS_MODE, USE_CHROME_CDP, CDP_URL
     HEADLESS_MODE = not args.show_browser
+    USE_CHROME_CDP = args.use_chrome
+    CDP_URL = f"http://localhost:{args.cdp_port}"
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -421,9 +550,11 @@ async def main():
     topic = args.topic
     safe_topic = re.sub(r"[^\w\s]", "", topic).replace(" ", "_")[:30]
 
+    mode = "Chrome CDP (da login)" if USE_CHROME_CDP else "Show browser" if not HEADLESS_MODE else "Auto scrape"
     print("=" * 60)
     print(f"  AUTO THREADS VIDEO GENERATOR")
     print(f"  Chu de: {topic}")
+    print(f"  Che do: {mode}")
     print(f"  Phong cach: Threads City")
     print("=" * 60)
 

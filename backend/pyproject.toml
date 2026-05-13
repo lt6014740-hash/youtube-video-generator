@@ -23,6 +23,9 @@ dependencies = [
 f5tts = [
     "f5-tts>=1.0.0",
 ]
+auto = [
+    "playwright>=1.40.0",
+]
 dev = [
     "ruff>=0.4.0",
     "mypy>=1.10.0",
