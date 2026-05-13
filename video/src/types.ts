@@ -110,3 +110,29 @@ export interface ReactionProps {
   width: number;
   height: number;
 }
+
+// --- Threads Scroll types ---
+
+export interface ThreadsPostData {
+  username: string;
+  timeAgo: string;
+  content: string;
+  likes?: number;
+  comments?: number;
+  reposts?: number;
+  hasReplies?: boolean;
+  avatarEmoji?: string;
+  avatarColor?: string;
+  avatarImage?: string;
+  postImage?: string;
+  audioFile?: string;
+  durationInSeconds: number;
+}
+
+export interface ThreadsScrollProps {
+  posts: ThreadsPostData[];
+  totalDurationInSeconds: number;
+  fps: number;
+  width: number;
+  height: number;
+}

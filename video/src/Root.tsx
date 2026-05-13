@@ -1,9 +1,10 @@
 import React from "react";
 import { Composition } from "remotion";
 import { ReactionVideo } from "./ReactionVideo";
+import { ThreadsScrollVideo } from "./ThreadsScrollVideo";
 import { TrueCrimeVideo } from "./TrueCrimeVideo";
 import { YouTubeVideo } from "./YouTubeVideo";
-import type { ReactionProps, TrueCrimeProps, VideoProps } from "./types";
+import type { ReactionProps, ThreadsScrollProps, TrueCrimeProps, VideoProps } from "./types";
 
 const DEFAULT_PROPS: VideoProps = {
   title: "Welcome to AI Video Generator",
@@ -121,6 +122,26 @@ const REACTION_DEFAULT: ReactionProps = {
   height: 1080,
 };
 
+const THREADS_SCROLL_DEFAULT: ThreadsScrollProps = {
+  posts: [
+    {
+      username: "user1",
+      timeAgo: "2 giờ",
+      content: "Bài đăng mẫu trên Threads",
+      likes: 100,
+      comments: 10,
+      reposts: 5,
+      avatarEmoji: "🐸",
+      avatarColor: "#4a9",
+      durationInSeconds: 6,
+    },
+  ],
+  totalDurationInSeconds: 6,
+  fps: 30,
+  width: 1920,
+  height: 1080,
+};
+
 export const RemotionRoot: React.FC = () => {
   const ytFrames = Math.round(
     (DEFAULT_PROPS.totalDurationInSeconds + 4 + 5) * DEFAULT_PROPS.fps
@@ -130,6 +151,9 @@ export const RemotionRoot: React.FC = () => {
   );
   const rxFrames = Math.round(
     (REACTION_DEFAULT.totalDurationInSeconds + 4 + 5) * REACTION_DEFAULT.fps
+  );
+  const tsFrames = Math.round(
+    THREADS_SCROLL_DEFAULT.totalDurationInSeconds * THREADS_SCROLL_DEFAULT.fps
   );
 
   return (
@@ -160,6 +184,15 @@ export const RemotionRoot: React.FC = () => {
         width={REACTION_DEFAULT.width}
         height={REACTION_DEFAULT.height}
         defaultProps={REACTION_DEFAULT as unknown as Record<string, unknown>}
+      />
+      <Composition
+        id="ThreadsScrollVideo"
+        component={ThreadsScrollVideo as React.FC}
+        durationInFrames={tsFrames}
+        fps={THREADS_SCROLL_DEFAULT.fps}
+        width={THREADS_SCROLL_DEFAULT.width}
+        height={THREADS_SCROLL_DEFAULT.height}
+        defaultProps={THREADS_SCROLL_DEFAULT as unknown as Record<string, unknown>}
       />
     </>
   );
