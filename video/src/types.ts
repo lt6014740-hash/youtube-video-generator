@@ -132,6 +132,8 @@ export interface ThreadsPostData {
 export interface ThreadsScrollProps {
   posts: ThreadsPostData[];
   totalDurationInSeconds: number;
+  backgroundMusic?: string;
+  backgroundMusicVolume?: number;
   fps: number;
   width: number;
   height: number;

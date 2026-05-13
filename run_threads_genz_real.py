@@ -38,8 +38,8 @@ POSTS = [
         "avatarEmoji": "🥀",
         "avatarColor": "#e94560",
         "narration": (
-            "Trang Gen Zi Cần Gì chia sẻ vụ án chấn động ở Cần Thơ. "
-            "Bài đăng nhận 2.400 lượt thích và gần 200 bình luận."
+            "Ủa cái gì vậy nè, vụ này ở Cần Thơ ám ảnh cực! "
+            "2 ngàn 4 likes, gần 200 bình luận luôn á."
         ),
     },
     {
@@ -57,8 +57,8 @@ POSTS = [
         "avatarEmoji": "📊",
         "avatarColor": "#3b82f6",
         "narration": (
-            "Gen Z đầu tư chứng khoán chia sẻ kiến thức phân tích kỹ thuật. "
-            "Gen Z Việt rất quan tâm đến tài chính trên Threads."
+            "Gen Z giờ chơi chứng luôn rồi nhé! Phân tích kỹ thuật gì đâu pro lắm. "
+            "Đầu tư thông minh chứ hông phải đánh bạc đâu nha."
         ),
     },
     {
@@ -76,8 +76,8 @@ POSTS = [
         "avatarEmoji": "💅",
         "avatarColor": "#a855f7",
         "narration": (
-            "Bài viral 3.200 likes: Lương 8 triệu nhưng skincare 15 bước. "
-            "Gen Z đề cao chăm sóc bản thân dù thu nhập khiêm tốn."
+            "Lương 8 triệu mà skincare 15 bước, đúng chuẩn Gen Z! "
+            "3 ngàn 2 likes, bài này viral dữ luôn á mọi người."
         ),
     },
     {
@@ -95,8 +95,8 @@ POSTS = [
         "avatarEmoji": "🎨",
         "avatarColor": "#f59e0b",
         "narration": (
-            "Trend Doodle AI phủ sóng Threads tháng 5, 890 lượt thích. "
-            "Gen Z dùng AI để sáng tạo nghệ thuật."
+            "Trend Doodle AI đang phủ sóng nè, cute phết luôn! "
+            "Gen Z dùng AI vẽ tranh, ai cũng tạo được luôn á."
         ),
     },
     {
@@ -114,8 +114,8 @@ POSTS = [
         "avatarEmoji": "📚",
         "avatarColor": "#06b6d4",
         "narration": (
-            "Sĩ tử 2k6 hỏi chọn FPT hay Bách Khoa cho ngành CNTT. "
-            "189 bình luận, Threads giờ là nơi Gen Z chọn trường."
+            "2k6 phân vân FPT hay Bách Khoa, 189 bình luận tư vấn kìa! "
+            "Threads giờ thành nơi chọn trường luôn rồi nha."
         ),
     },
     {
@@ -133,8 +133,8 @@ POSTS = [
         "avatarEmoji": "👒",
         "avatarColor": "#ec4899",
         "narration": (
-            "Cô gái Gen Z 22 tuổi khôi phục nghề nón lá lụa làng Chuông. "
-            "1 tuần đăng Threads đạt 62.000 views. Truyền cảm hứng!"
+            "Gái Gen Z 22 tuổi khôi phục nón lá lụa làng Chuông, 62 ngàn views! "
+            "Cháy quá, truyền thống mà vẫn cực kỳ cool."
         ),
     },
     {
@@ -152,8 +152,8 @@ POSTS = [
         "avatarEmoji": "💪",
         "avatarColor": "#f97316",
         "narration": (
-            "Bài viral 1.800 likes: Về đúng 5 giờ, nghỉ hết phép. "
-            "Tư duy work-life balance mà Gen Z đang lan tỏa mạnh."
+            "Về đúng 5 giờ, nghỉ hết phép, đừng nghe điện công việc cuối tuần. "
+            "Gen Z không sống để làm, mà làm để sống nha!"
         ),
     },
 ]
@@ -209,6 +209,8 @@ async def main():
     props = {
         "posts": posts_data,
         "totalDurationInSeconds": total_duration,
+        "backgroundMusic": "audio/background-music.mp3",
+        "backgroundMusicVolume": 0.15,
         "fps": 30,
         "width": 1920,
         "height": 1080,

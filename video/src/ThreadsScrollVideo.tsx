@@ -12,8 +12,11 @@ import type { ThreadsScrollProps } from "./types";
 export const ThreadsScrollVideo: React.FC<ThreadsScrollProps> = ({
   posts,
   fps,
+  backgroundMusic,
+  backgroundMusicVolume,
 }) => {
   const effectiveFps = fps || 30;
+  const bgMusicVol = backgroundMusicVolume ?? 0.15;
 
   let currentFrame = 0;
 
@@ -26,6 +29,15 @@ export const ThreadsScrollVideo: React.FC<ThreadsScrollProps> = ({
         color3="#bdd4ea"
         cellSize={80}
       />
+
+      {/* Background music — loops for entire video, lower volume */}
+      {backgroundMusic && (
+        <Audio
+          src={staticFile(backgroundMusic)}
+          volume={bgMusicVol}
+          loop
+        />
+      )}
 
       {/* Render each post as a Sequence */}
       {posts.map((post, index) => {
@@ -53,7 +65,7 @@ export const ThreadsScrollVideo: React.FC<ThreadsScrollProps> = ({
 
             {/* Audio narration */}
             {post.audioFile && (
-              <Audio src={staticFile(post.audioFile)} />
+              <Audio src={staticFile(post.audioFile)} volume={0.9} />
             )}
           </Sequence>
         );
