@@ -152,6 +152,8 @@ export interface ThreadsPostData {
   avatarColor?: string;
   avatarImage?: string;
   postImage?: string;
+  memeImage?: string;
+  memeDuration?: number;
   audioFile?: string;
   durationInSeconds: number;
 }

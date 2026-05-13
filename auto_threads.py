@@ -464,6 +464,205 @@ async def _extract_threads_posts(page, max_posts: int) -> list[dict]:
     return posts
 
 
+async def scrape_thread_comments(url: str, max_comments: int = 10) -> tuple[dict, list[dict]]:
+    """Scrape binh luan noi bat tu 1 URL bai viet Threads cu the.
+    Tra ve (original_post, sorted_comments_by_likes).
+    """
+    from playwright.async_api import async_playwright
+
+    # Normalize URL
+    url = url.replace("threads.com", "threads.net")
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    print(f"\n[SCRAPER] Mo bai viet: {url}")
+
+    original_post: dict = {}
+    comments: list[dict] = []
+
+    async with async_playwright() as p:
+        browser = None
+        context = None
+        page = None
+
+        try:
+            if USE_CHROME_CDP:
+                browser = await p.chromium.connect_over_cdp(CDP_URL)
+                context = browser.contexts[0] if browser.contexts else await browser.new_context()
+                page = await context.new_page()
+            else:
+                BROWSER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+                context = await p.chromium.launch_persistent_context(
+                    user_data_dir=str(BROWSER_STATE_DIR),
+                    headless=HEADLESS_MODE,
+                    viewport={"width": 1280, "height": 900},
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    ),
+                    locale="vi-VN",
+                )
+                page = await context.new_page()
+
+            await page.goto(url, timeout=25000, wait_until="domcontentloaded")
+            await page.wait_for_timeout(4000)
+
+            # Scroll to load more comments
+            for _ in range(6):
+                await page.evaluate("window.scrollBy(0, 800)")
+                await page.wait_for_timeout(1200)
+
+            # Parse comments from body text (works reliably in headless)
+            body_text = await page.inner_text("body")
+            lines = [l.strip() for l in body_text.split("\n") if l.strip()]
+
+            # Also get username links in order for reliable username extraction
+            all_user_links = await page.query_selector_all("a[href^='/@']")
+            ordered_usernames: list[str] = []
+            for link in all_user_links:
+                href = await link.get_attribute("href") or ""
+                uname = href.strip("/").lstrip("@")
+                # Filter out post/media links — only keep pure profile links
+                if uname and "/" not in uname and uname not in ("search", "login"):
+                    if uname not in ordered_usernames or len(ordered_usernames) < 3:
+                        ordered_usernames.append(uname)
+
+            # State machine to parse text blocks
+            skip_words = {
+                "thread", "log in", "sign up", "translate", "privacy",
+                "terms", "say more", "continue with", "related threads",
+                "lượt xem", "tác giả", "report", "cookies", "© 2026",
+            }
+
+            current_username = None
+            username_idx = 0
+            entries: list[dict] = []
+            i = 0
+
+            while i < len(lines):
+                line = lines[i]
+                lower = line.lower().strip()
+
+                # Skip UI text
+                if any(sw in lower for sw in skip_words):
+                    i += 1
+                    continue
+
+                # Detect username: short text with dots/underscores, no spaces
+                is_username = (
+                    len(line) < 30
+                    and " " not in line
+                    and ("." in line or "_" in line)
+                    and not line.startswith("http")
+                    and not re.match(r"^[\d,./]+$", line)
+                )
+
+                if is_username:
+                    current_username = line.lstrip("@").strip()
+                    i += 1
+                    # Skip timestamp line (e.g., "09/02/2026" or "1d")
+                    if i < len(lines) and re.match(r"^[\d/]+$|^\d+[hdmswn]$", lines[i].strip()):
+                        i += 1
+                    # Skip "· Tác giả" line
+                    if i < len(lines) and "tác giả" in lines[i].lower():
+                        i += 1
+                    continue
+
+                # Skip pure number lines (engagement counts like "3K", "426", "554", etc.)
+                if re.match(r"^[\d,.]+[KMkm]?$", line):
+                    i += 1
+                    continue
+
+                # Skip date-like lines
+                if re.match(r"^\d{2}/\d{2}/\d{2,4}$", line):
+                    i += 1
+                    continue
+
+                # Content line: substantial text = a comment
+                if len(line) > 10:
+                    username = current_username or (
+                        ordered_usernames[username_idx]
+                        if username_idx < len(ordered_usernames)
+                        else "threads_user"
+                    )
+
+                    # Collect engagement numbers that follow
+                    likes = 0
+                    cmt_count = 0
+                    j = i + 1
+                    nums_found: list[int] = []
+                    while j < len(lines) and len(nums_found) < 4:
+                        nl = lines[j].strip()
+                        if re.match(r"^[\d,.]+[KMkm]?$", nl):
+                            nums_found.append(_parse_count(nl))
+                            j += 1
+                        else:
+                            break
+
+                    if nums_found:
+                        likes = nums_found[0]
+                    if len(nums_found) > 1:
+                        cmt_count = nums_found[1]
+
+                    entries.append({
+                        "username": username[:25],
+                        "content": line[:300],
+                        "likes": likes,
+                        "comments": cmt_count,
+                        "reposts": 0,
+                    })
+                    current_username = None
+                    username_idx += 1
+                    i = j  # skip past the numbers
+                    continue
+
+                i += 1
+
+            if entries:
+                original_post = entries[0]
+                seen_content: set[str] = set()
+                for entry in entries[1:]:
+                    ck = entry["content"][:50]
+                    if ck in seen_content:
+                        continue
+                    seen_content.add(ck)
+                    comments.append(entry)
+                print(f"[SCRAPER] Tim thay {len(entries)} entries tu trang")
+
+        except Exception as e:
+            print(f"[SCRAPER] Loi: {e}")
+
+        if context and not USE_CHROME_CDP:
+            await context.close()
+
+    # Sort by likes descending
+    comments.sort(key=lambda c: c.get("likes", 0), reverse=True)
+    comments = comments[:max_comments]
+
+    print(f"[SCRAPER] Bai goc: @{original_post.get('username', '?')}")
+    print(f"[SCRAPER] {len(comments)} binh luan noi bat (sap xep theo likes)")
+    for c in comments[:5]:
+        print(f"  @{c['username']} ({c['likes']} likes): {c['content'][:50]}...")
+
+    return original_post, comments
+
+
+def _parse_count(text: str) -> int:
+    """Parse '3K', '1.2K', '554' into int."""
+    text = text.strip().replace(",", "")
+    if not text:
+        return 0
+    if text.upper().endswith("K"):
+        return int(float(text[:-1]) * 1000)
+    if text.upper().endswith("M"):
+        return int(float(text[:-1]) * 1000000)
+    try:
+        return int(text)
+    except ValueError:
+        return 0
+
+
 def _generate_fallback_posts(topic: str, count: int) -> list[dict]:
     """Generate topic-specific posts when scraping fails (Threads City style)."""
 
@@ -551,6 +750,73 @@ def generate_city_narration(post: dict, index: int, total: int) -> str:
     return narration
 
 
+def _extract_meme_keyword(content: str) -> str:
+    """Extract 2-3 core keywords from comment content for meme search."""
+    stop_words = {
+        "mình", "của", "và", "là", "được", "có", "không", "này", "cho", "với",
+        "các", "một", "những", "đã", "đang", "sẽ", "rất", "thì", "mà", "nhưng",
+        "nên", "vì", "để", "từ", "theo", "bạn", "mọi", "người", "nha", "nè",
+        "luôn", "quá", "lắm", "ghê", "dữ", "thiệt", "thật", "thế", "vậy",
+        "hôm", "nay", "hãy", "tôi", "chúng", "trên", "đó", "cái", "ông",
+        "bà", "anh", "chị", "em", "mấy", "tui", "ổng", "nào", "trường",
+    }
+    words = re.findall(r"[\w]+", content.lower())
+    core = [w for w in words if w not in stop_words and len(w) > 2]
+    return " ".join(core[:3]) if core else "funny"
+
+
+def _generate_url_intro(original_post: dict) -> str:
+    """Generate intro narration for URL comment video."""
+    username = original_post.get("username", "threads_user")
+    content = original_post.get("content", "")[:80]
+    likes = original_post.get("likes", 0)
+    comments = original_post.get("comments", 0)
+
+    intros = [
+        f"Nóng nè! Bài viết của @{username}: \"{content}\". "
+        f"{likes:,} likes và {comments} bình luận, xem mọi người nói gì nha!",
+        f"Hot trên Threads! @{username} đăng: \"{content}\". "
+        f"Viral dữ luôn với {likes:,} likes. Cùng đọc bình luận nổi bật!",
+        f"Yo! @{username} đặt câu hỏi: \"{content}\". "
+        f"Cộng đồng Threads bùng nổ với {comments} bình luận. Check ngay!",
+    ]
+    return random.choice(intros)
+
+
+def _generate_comment_narration(post: dict, index: int, total: int) -> str:
+    """Generate narration for a specific comment in URL mode."""
+    username = post.get("username", "user")
+    content = post.get("content", "")[:150]
+    likes = post.get("likes", 0)
+
+    openers = random.choice(CITY_OPENERS)
+    connector = random.choice(CITY_CONNECTORS)
+
+    if likes > 500:
+        engagement = f"Comment này {likes} likes, top phản hồi luôn"
+    elif likes > 100:
+        engagement = f"{likes} likes, nhiều người đồng tình"
+    elif likes > 0:
+        engagement = f"{likes} likes"
+    else:
+        engagement = "ý kiến đáng suy ngẫm"
+
+    patterns = [
+        f"{openers} @{username} bình luận: {content}. {engagement}!",
+        f"@{username} phản hồi: {content}. {engagement}, {connector}!",
+        f"Comment từ @{username}: {content}. {engagement}!",
+        f"{openers} @{username} chia sẻ góc nhìn: {content}. {engagement}!",
+    ]
+
+    narration = patterns[index % len(patterns)]
+
+    if index == total - 1:
+        closer = random.choice(CITY_CLOSERS)
+        narration += f" {closer}"
+
+    return narration
+
+
 def generate_intro_narration(topic: str) -> str:
     """Generate intro narration for the video."""
     intros = [
@@ -572,10 +838,13 @@ async def main():
             Vi du:
               python auto_threads.py "tinh hinh viec lam tai ha noi"
               python auto_threads.py "gen z va cong viec"
-              python auto_threads.py "drama showbiz hom nay"
+              python auto_threads.py --url "https://www.threads.com/@user/post/ABC123"
         """),
     )
-    parser.add_argument("topic", help="Chu de tim kiem tren Threads")
+    parser.add_argument("topic", nargs="?", default=None,
+                        help="Chu de tim kiem tren Threads (bo qua neu dung --url)")
+    parser.add_argument("--url", type=str, default=None,
+                        help="URL bai viet Threads — lay binh luan noi bat")
     parser.add_argument("--posts", type=int, default=MAX_POSTS, help="So bai dang (mac dinh 7)")
     parser.add_argument("--voice", default=MALE_VOICE, help="Giong TTS")
     parser.add_argument("--template", default="threads", choices=["threads", "historical"],
@@ -591,6 +860,9 @@ async def main():
                         help="Port Chrome remote debugging (mac dinh 9222)")
     args = parser.parse_args()
 
+    if not args.url and not args.topic:
+        parser.error("Can topic hoac --url")
+
     # Pass flags to scraper
     global HEADLESS_MODE, USE_CHROME_CDP, CDP_URL
     HEADLESS_MODE = not args.show_browser
@@ -600,54 +872,124 @@ async def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
-    topic = args.topic
+    url_mode = bool(args.url)
+    topic = args.topic or "Threads comments"
     safe_topic = re.sub(r"[^\w\s]", "", topic).replace(" ", "_")[:30]
 
-    mode = "Chrome CDP (da login)" if USE_CHROME_CDP else "Show browser" if not HEADLESS_MODE else "Auto scrape"
+    mode = "URL comments" if url_mode else (
+        "Chrome CDP (da login)" if USE_CHROME_CDP else "Show browser" if not HEADLESS_MODE else "Auto scrape")
     print("=" * 60)
     print(f"  AUTO THREADS VIDEO GENERATOR")
-    print(f"  Chu de: {topic}")
+    if url_mode:
+        print(f"  URL: {args.url}")
+    else:
+        print(f"  Chu de: {topic}")
     print(f"  Che do: {mode}")
     print(f"  Phong cach: Threads City")
     print("=" * 60)
 
-    # --- Step 1: Scrape posts ---
-    print("\n[1/5] Thu thap bai dang tu Threads...")
-    posts = await scrape_threads(topic, max_posts=args.posts)
+    if url_mode:
+        # --- URL MODE: Scrape comments from a specific post ---
+        print("\n[1/5] Lay binh luan noi bat tu bai viet...")
+        original_post, comments = await scrape_thread_comments(args.url, max_comments=args.posts)
 
-    # --- Step 2: Find meme images from Pinterest ---
-    if not args.no_meme:
-        print("\n[2/5] Tim anh meme tu Pinterest...")
-        from pinterest_scraper import find_memes_for_posts
-        posts = await find_memes_for_posts(posts, output_dir=ROOT_DIR / "video" / "public" / "images")
+        if not original_post:
+            print("[ERROR] Khong lay duoc bai viet goc!")
+            return
+
+        # Use original post content as topic
+        topic = original_post.get("content", "Threads discussion")[:60]
+        safe_topic = re.sub(r"[^\w\s]", "", topic).replace(" ", "_")[:30]
+
+        posts = comments if comments else []
+
+        if len(posts) < 3:
+            print(f"[WARNING] Chi lay duoc {len(posts)} binh luan, them fallback...")
+
+        # --- Step 2: Find meme for each comment ---
+        if not args.no_meme:
+            print("\n[2/5] Tim anh meme phu hop tung binh luan...")
+            from pinterest_scraper import find_meme_images
+            img_dir = ROOT_DIR / "video" / "public" / "images"
+            img_dir.mkdir(parents=True, exist_ok=True)
+            for i, post in enumerate(posts):
+                kw = _extract_meme_keyword(post.get("content", ""))
+                print(f"  [{i+1}] '{kw}' -> ", end="", flush=True)
+                images = await find_meme_images(kw + " meme", count=1, output_dir=img_dir)
+                if images:
+                    post["memeImage"] = images[0]
+                    print(f"OK ({images[0]})")
+                else:
+                    post["memeImage"] = ""
+                    print("(khong tim thay)")
+        else:
+            print("\n[2/5] Bo qua tim anh meme (--no-meme)")
+
+        # --- Step 3: Generate narrations for comments ---
+        print("\n[3/5] Viet kich ban Threads City style...")
+        intro_narration = _generate_url_intro(original_post)
+        for i, post in enumerate(posts):
+            post["narration"] = _generate_comment_narration(post, i, len(posts))
+            post["timeAgo"] = post.get("timeAgo", random.choice(["1 giờ", "2 giờ", "3 giờ"]))
+            post["hasReplies"] = post.get("comments", 0) > 0
+            post["avatarEmoji"] = AVATAR_EMOJIS[i % len(AVATAR_EMOJIS)]
+            post["avatarColor"] = AVATAR_COLORS[i % len(AVATAR_COLORS)]
+            print(f"  [{i+1}] @{post['username']}: {post['narration'][:60]}...")
+
+        # Add intro (original post) as first entry
+        intro_post = {
+            "username": original_post.get("username", "threads.city"),
+            "timeAgo": "vừa xong",
+            "content": original_post.get("content", topic),
+            "likes": original_post.get("likes", 0),
+            "comments": original_post.get("comments", 0),
+            "reposts": original_post.get("reposts", 0),
+            "hasReplies": True,
+            "avatarEmoji": "🔥",
+            "avatarColor": "#e94560",
+            "narration": intro_narration,
+        }
+        all_posts = [intro_post] + posts
+
     else:
-        print("\n[2/5] Bo qua tim anh meme (--no-meme)")
+        # --- TOPIC MODE (existing behavior) ---
+        # --- Step 1: Scrape posts ---
+        print("\n[1/5] Thu thap bai dang tu Threads...")
+        posts = await scrape_threads(topic, max_posts=args.posts)
 
-    # --- Step 3: Generate narrations ---
-    print("\n[3/5] Viet kich ban Threads City style...")
-    intro_narration = generate_intro_narration(topic)
-    for i, post in enumerate(posts):
-        post["narration"] = generate_city_narration(post, i, len(posts))
-        post["timeAgo"] = random.choice(["1 giờ", "2 giờ", "3 giờ", "5 giờ", "8 giờ", "12 giờ"])
-        post["hasReplies"] = True
-        post["avatarEmoji"] = AVATAR_EMOJIS[i % len(AVATAR_EMOJIS)]
-        post["avatarColor"] = AVATAR_COLORS[i % len(AVATAR_COLORS)]
-        print(f"  [{i+1}] @{post['username']}: {post['narration'][:60]}...")
+        # --- Step 2: Find meme images from Pinterest ---
+        if not args.no_meme:
+            print("\n[2/5] Tim anh meme tu Pinterest...")
+            from pinterest_scraper import find_memes_for_posts
+            posts = await find_memes_for_posts(posts, output_dir=ROOT_DIR / "video" / "public" / "images")
+        else:
+            print("\n[2/5] Bo qua tim anh meme (--no-meme)")
 
-    # Add intro as first "post"
-    intro_post = {
-        "username": "threads.city",
-        "timeAgo": "vừa xong",
-        "content": f"🔥 TRENDING: {topic.upper()}\n\nCùng xem cộng đồng Threads đang nói gì!",
-        "likes": random.randint(5000, 20000),
-        "comments": random.randint(500, 2000),
-        "reposts": random.randint(200, 1000),
-        "hasReplies": True,
-        "avatarEmoji": "🏙️",
-        "avatarColor": "#e94560",
-        "narration": intro_narration,
-    }
-    all_posts = [intro_post] + posts
+        # --- Step 3: Generate narrations ---
+        print("\n[3/5] Viet kich ban Threads City style...")
+        intro_narration = generate_intro_narration(topic)
+        for i, post in enumerate(posts):
+            post["narration"] = generate_city_narration(post, i, len(posts))
+            post["timeAgo"] = random.choice(["1 giờ", "2 giờ", "3 giờ", "5 giờ", "8 giờ", "12 giờ"])
+            post["hasReplies"] = True
+            post["avatarEmoji"] = AVATAR_EMOJIS[i % len(AVATAR_EMOJIS)]
+            post["avatarColor"] = AVATAR_COLORS[i % len(AVATAR_COLORS)]
+            print(f"  [{i+1}] @{post['username']}: {post['narration'][:60]}...")
+
+        # Add intro as first "post"
+        intro_post = {
+            "username": "threads.city",
+            "timeAgo": "vừa xong",
+            "content": f"🔥 TRENDING: {topic.upper()}\n\nCùng xem cộng đồng Threads đang nói gì!",
+            "likes": random.randint(5000, 20000),
+            "comments": random.randint(500, 2000),
+            "reposts": random.randint(200, 1000),
+            "hasReplies": True,
+            "avatarEmoji": "🏙️",
+            "avatarColor": "#e94560",
+            "narration": intro_narration,
+        }
+        all_posts = [intro_post] + posts
 
     # --- Step 4: Generate TTS audio ---
     print("\n[4/5] Tao audio TTS...")
@@ -664,8 +1006,10 @@ async def main():
         filename = Path(audio_file).name
         shutil.copy2(audio_file, AUDIO_DIR / filename)
 
-        has_image = bool(post.get("postImage"))
-        dur = max(duration + (2.5 if has_image else 1.5), 5.0)
+        has_meme = bool(post.get("memeImage"))
+        meme_dur = 3.0 if has_meme else 0
+        has_post_image = bool(post.get("postImage"))
+        dur = max(duration + (2.5 if has_post_image else 1.5) + meme_dur, 5.0)
         posts_data.append({
             "username": post["username"],
             "timeAgo": post["timeAgo"],
@@ -677,6 +1021,8 @@ async def main():
             "avatarEmoji": post.get("avatarEmoji", "💬"),
             "avatarColor": post.get("avatarColor", "#444"),
             "postImage": post.get("postImage", ""),
+            "memeImage": post.get("memeImage", ""),
+            "memeDuration": meme_dur,
             "audioFile": f"audio/{filename}",
             "durationInSeconds": dur,
         })
