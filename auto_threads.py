@@ -99,6 +99,43 @@ USE_CHROME_CDP = False
 CDP_URL = "http://localhost:9222"
 
 
+def _decompose_keywords(topic: str) -> list[str]:
+    """Boc tach tu khoa dai thanh cac tu khoa ngan hon.
+    VD: 'tình hình việc làm tại hà nội hôm nay'
+      -> ['tình hình việc làm tại hà nội hôm nay',
+          'việc làm hà nội', 'việc làm', 'hà nội']
+    """
+    stop_words = {
+        "tại", "ở", "của", "và", "là", "có", "không", "này", "cho", "với",
+        "các", "một", "những", "đã", "đang", "sẽ", "rất", "thì", "mà", "nhưng",
+        "nên", "vì", "để", "từ", "theo", "hôm", "nay", "ngày", "về", "trên",
+        "the", "in", "at", "on", "for", "and", "or", "how", "what", "tình", "hình",
+    }
+
+    # Full topic first
+    variants: list[str] = [topic]
+
+    # Remove stop words to get core keywords
+    words = topic.lower().split()
+    core = [w for w in words if w not in stop_words and len(w) > 1]
+
+    # Combine core words in groups of 2-3
+    if len(core) >= 3:
+        variants.append(" ".join(core))
+    if len(core) >= 2:
+        # Sliding window of 2
+        for i in range(len(core) - 1):
+            pair = f"{core[i]} {core[i+1]}"
+            if pair not in variants:
+                variants.append(pair)
+    # Individual important words (only if 3+ chars)
+    for w in core:
+        if len(w) >= 3 and w not in variants:
+            variants.append(w)
+
+    return variants
+
+
 def _is_vietnamese(text: str) -> bool:
     """Check if text contains Vietnamese characters."""
     vn_chars = "àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ"
@@ -133,8 +170,14 @@ async def scrape_threads(topic: str, max_posts: int = MAX_POSTS) -> list[dict]:
                 page = await context.new_page()
                 close_browser = False
 
-                # Scrape truc tiep Threads search (da login)
-                posts = await _scrape_threads_logged_in(page, topic, max_posts)
+                # Scrape Threads search voi keyword decomposition
+                keywords = _decompose_keywords(topic)
+                for kw in keywords:
+                    if len(posts) >= max_posts:
+                        break
+                    print(f"[SCRAPER] Tim voi tu khoa: '{kw}'")
+                    new_posts = await _scrape_threads_logged_in(page, kw, max_posts - len(posts))
+                    posts.extend(new_posts)
 
             else:
                 # --- CHE DO 2/3: Dung browser rieng ---
@@ -164,18 +207,26 @@ async def scrape_threads(topic: str, max_posts: int = MAX_POSTS) -> list[dict]:
                     # Da login hoac trang co noi dung
                     posts = await _scrape_threads_logged_in(page, topic, max_posts)
 
-                # Neu chua du bai, dung search engine
+                # Neu chua du bai, dung search engine voi keyword decomposition
                 if len(posts) < max_posts:
-                    remaining = max_posts - len(posts)
-                    print(f"[SCRAPER] Tim them bai qua search engine...")
-                    profile_urls = await _find_threads_profiles_via_search(page, topic)
-                    for url in profile_urls:
+                    keywords = _decompose_keywords(topic)
+                    print(f"[SCRAPER] Tim bai qua search engine, {len(keywords)} bien the tu khoa...")
+                    visited_profiles: set[str] = set()
+                    for kw in keywords:
                         if len(posts) >= max_posts:
                             break
-                        new_posts = await _scrape_threads_profile(page, url, topic)
-                        posts.extend(new_posts)
-                        if new_posts:
-                            print(f"  [SCRAPER] {url} -> {len(new_posts)} bai")
+                        print(f"  [SCRAPER] Thu tu khoa: '{kw}'")
+                        profile_urls = await _find_threads_profiles_via_search(page, kw)
+                        for url in profile_urls:
+                            if len(posts) >= max_posts:
+                                break
+                            if url in visited_profiles:
+                                continue
+                            visited_profiles.add(url)
+                            new_posts = await _scrape_threads_profile(page, url, topic)
+                            posts.extend(new_posts)
+                            if new_posts:
+                                print(f"    {url} -> {len(new_posts)} bai")
 
         except Exception as e:
             print(f"[SCRAPER] Loi: {e}")
@@ -530,6 +581,8 @@ async def main():
     parser.add_argument("--template", default="threads", choices=["threads", "historical"],
                         help="Template video (mac dinh: threads)")
     parser.add_argument("--no-music", action="store_true", help="Khong dung nhac nen")
+    parser.add_argument("--no-meme", action="store_true",
+                        help="Khong tim anh meme tu Pinterest")
     parser.add_argument("--show-browser", action="store_true",
                         help="Hien thi trinh duyet (de dang nhap Threads)")
     parser.add_argument("--use-chrome", action="store_true",
@@ -559,11 +612,19 @@ async def main():
     print("=" * 60)
 
     # --- Step 1: Scrape posts ---
-    print("\n[1/4] Thu thap bai dang tu Threads...")
+    print("\n[1/5] Thu thap bai dang tu Threads...")
     posts = await scrape_threads(topic, max_posts=args.posts)
 
-    # --- Step 2: Generate narrations ---
-    print("\n[2/4] Viet kich ban Threads City style...")
+    # --- Step 2: Find meme images from Pinterest ---
+    if not args.no_meme:
+        print("\n[2/5] Tim anh meme tu Pinterest...")
+        from pinterest_scraper import find_memes_for_posts
+        posts = await find_memes_for_posts(posts, output_dir=ROOT_DIR / "video" / "public" / "images")
+    else:
+        print("\n[2/5] Bo qua tim anh meme (--no-meme)")
+
+    # --- Step 3: Generate narrations ---
+    print("\n[3/5] Viet kich ban Threads City style...")
     intro_narration = generate_intro_narration(topic)
     for i, post in enumerate(posts):
         post["narration"] = generate_city_narration(post, i, len(posts))
@@ -588,8 +649,8 @@ async def main():
     }
     all_posts = [intro_post] + posts
 
-    # --- Step 3: Generate TTS audio ---
-    print("\n[3/4] Tao audio TTS...")
+    # --- Step 4: Generate TTS audio ---
+    print("\n[4/5] Tao audio TTS...")
     from backend.app.tts_service import synthesize_edge_tts
 
     posts_data = []
@@ -603,7 +664,8 @@ async def main():
         filename = Path(audio_file).name
         shutil.copy2(audio_file, AUDIO_DIR / filename)
 
-        dur = max(duration + 1.5, 5.0)
+        has_image = bool(post.get("postImage"))
+        dur = max(duration + (2.5 if has_image else 1.5), 5.0)
         posts_data.append({
             "username": post["username"],
             "timeAgo": post["timeAgo"],
@@ -614,6 +676,7 @@ async def main():
             "hasReplies": post.get("hasReplies", False),
             "avatarEmoji": post.get("avatarEmoji", "💬"),
             "avatarColor": post.get("avatarColor", "#444"),
+            "postImage": post.get("postImage", ""),
             "audioFile": f"audio/{filename}",
             "durationInSeconds": dur,
         })
@@ -621,8 +684,8 @@ async def main():
 
     total_duration = sum(p["durationInSeconds"] for p in posts_data)
 
-    # --- Step 4: Render video ---
-    print(f"\n[4/4] Render video...")
+    # --- Step 5: Render video ---
+    print(f"\n[5/5] Render video...")
 
     bgm_path = AUDIO_DIR / "background-music.mp3"
     has_bgm = bgm_path.exists() and not args.no_music
