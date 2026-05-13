@@ -5,6 +5,9 @@ export interface SceneData {
   visualDescription: string;
   durationInSeconds: number;
   audioFile: string;
+  imageFile?: string;
+  quote?: string;
+  quoteAuthor?: string;
 }
 
 export interface SubtitleData {
