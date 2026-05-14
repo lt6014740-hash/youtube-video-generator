@@ -167,6 +167,33 @@ AVATAR_COLORS = [
 ]
 HEADLESS_MODE = True
 
+# Regex pattern to strip emojis and special Unicode symbols that Edge-TTS cannot pronounce
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"  # emoticons
+    "\U0001F300-\U0001F5FF"  # symbols & pictographs
+    "\U0001F680-\U0001F6FF"  # transport & map
+    "\U0001F1E0-\U0001F1FF"  # flags
+    "\U00002702-\U000027B0"  # dingbats
+    "\U000024C2-\U0001F251"  # enclosed chars
+    "\U0001f926-\U0001f937"  # supplemental
+    "\U00010000-\U0010ffff"  # all other supplementary
+    "\u2640-\u2642"  # gender symbols
+    "\u2600-\u2B55"  # misc symbols
+    "\u200d"  # zero width joiner
+    "\ufe0f"  # variation selector
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _clean_text_for_tts(text: str) -> str:
+    """Remove emojis and special chars that cause Edge-TTS to fail."""
+    cleaned = _EMOJI_RE.sub("", text)
+    # Collapse multiple spaces
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned if cleaned else "Nội dung bài đăng"
+
 
 # ---------------------------------------------------------------------------
 # THREADS SCRAPER (Playwright)
@@ -1072,11 +1099,28 @@ async def main():
     posts_data = []
     for i, post in enumerate(all_posts):
         print(f"  Audio {i+1}/{len(all_posts)}: @{post['username']}")
-        audio_file, duration = await synthesize_edge_tts(
-            text=post["narration"],
-            language="vi",
-            voice=args.voice,
-        )
+        clean_narration = _clean_text_for_tts(post["narration"])
+        try:
+            audio_file, duration = await synthesize_edge_tts(
+                text=clean_narration,
+                language="vi",
+                voice=args.voice,
+            )
+        except Exception as e:
+            print(f"    [WARN] TTS loi, thu lai voi text don gian: {e}")
+            fallback_text = _clean_text_for_tts(post.get("content", "")[:100])
+            try:
+                audio_file, duration = await synthesize_edge_tts(
+                    text=fallback_text,
+                    language="vi",
+                    voice=args.voice,
+                )
+            except Exception:
+                audio_file, duration = await synthesize_edge_tts(
+                    text="Nội dung bài đăng tiếp theo trên Threads",
+                    language="vi",
+                    voice=args.voice,
+                )
         filename = Path(audio_file).name
         shutil.copy2(audio_file, AUDIO_DIR / filename)
 
