@@ -25,6 +25,7 @@ Phong cach: Threads City — giong ke chuyen do thi, gan gui, trending
 import argparse
 import asyncio
 import json
+import os
 import random
 import re
 import shutil
@@ -1096,31 +1097,79 @@ async def main():
     print("\n[4/5] Tao audio TTS...")
     from backend.app.tts_service import synthesize_edge_tts
 
+    async def _tts_with_retry(text: str, voice: str, max_retries: int = 3) -> tuple[str, float]:
+        """Call Edge-TTS with retry and delay to handle rate limiting."""
+        for attempt in range(max_retries):
+            try:
+                result = await synthesize_edge_tts(
+                    text=text,
+                    language="vi",
+                    voice=voice,
+                )
+                return result
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 * (attempt + 1)
+                    print(f"    [RETRY] Lan {attempt+1} loi, doi {wait_time}s: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    raise
+
+    def _generate_silent_audio(duration_sec: float = 3.0) -> tuple[str, float]:
+        """Generate a silent audio file as final fallback."""
+        import uuid
+        silent_path = str(OUTPUT_DIR / "audio" / f"silent_{uuid.uuid4()}.mp3")
+        os.makedirs(os.path.dirname(silent_path), exist_ok=True)
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-f", "lavfi", "-i",
+                 f"anullsrc=r=24000:cl=mono", "-t", str(duration_sec),
+                 "-q:a", "9", silent_path],
+                capture_output=True, timeout=10,
+            )
+        except Exception:
+            # Minimal valid MP3: write a tiny silent MP3 frame
+            with open(silent_path, "wb") as f:
+                f.write(b'\xff\xfb\x90\x00' + b'\x00' * 417)
+        return silent_path, duration_sec
+
     posts_data = []
     for i, post in enumerate(all_posts):
         print(f"  Audio {i+1}/{len(all_posts)}: @{post['username']}")
         clean_narration = _clean_text_for_tts(post["narration"])
+        audio_file = None
+        duration = 5.0
+
+        # Attempt 1: clean narration with retry
         try:
-            audio_file, duration = await synthesize_edge_tts(
-                text=clean_narration,
-                language="vi",
-                voice=args.voice,
-            )
+            audio_file, duration = await _tts_with_retry(clean_narration, args.voice)
         except Exception as e:
-            print(f"    [WARN] TTS loi, thu lai voi text don gian: {e}")
+            print(f"    [WARN] TTS loi voi narration: {e}")
+
+        # Attempt 2: clean content with retry
+        if audio_file is None:
             fallback_text = _clean_text_for_tts(post.get("content", "")[:100])
             try:
-                audio_file, duration = await synthesize_edge_tts(
-                    text=fallback_text,
-                    language="vi",
-                    voice=args.voice,
+                await asyncio.sleep(2)
+                audio_file, duration = await _tts_with_retry(fallback_text, args.voice)
+            except Exception as e:
+                print(f"    [WARN] TTS loi voi content: {e}")
+
+        # Attempt 3: simple hardcoded text
+        if audio_file is None:
+            try:
+                await asyncio.sleep(3)
+                audio_file, duration = await _tts_with_retry(
+                    "Noi dung bai dang tiep theo tren Threads", args.voice
                 )
-            except Exception:
-                audio_file, duration = await synthesize_edge_tts(
-                    text="Nội dung bài đăng tiếp theo trên Threads",
-                    language="vi",
-                    voice=args.voice,
-                )
+            except Exception as e:
+                print(f"    [WARN] TTS loi lan cuoi: {e}")
+
+        # Final fallback: silent audio
+        if audio_file is None:
+            print(f"    [FALLBACK] Tao audio im lang")
+            audio_file, duration = _generate_silent_audio()
+
         filename = Path(audio_file).name
         shutil.copy2(audio_file, AUDIO_DIR / filename)
 
